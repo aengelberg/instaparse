@@ -284,7 +284,7 @@
       ;_ (dprintln found-result? (count @(:stack tramp)) (count @(:next-stack tramp)))
       (cond
         @(:success tramp)
-        (lazy-seq (cons (:result @(:success tramp))
+        (lazy-seq (cons (red/force-all (:result @(:success tramp)))
                         (do (reset! (:success tramp) nil)
                           (run tramp true))))
         
