@@ -1,5 +1,5 @@
 (ns instaparse.core
-  (:use instaparse.clone)
+  #?(:clj (:use instaparse.clone))
   (:require [instaparse.gll :as gll] 
             [instaparse.cfg :as cfg]
             [instaparse.failure :as fail]
@@ -11,23 +11,25 @@
             [instaparse.repeat :as repeat]
             [instaparse.combinators-source :as c]
             [instaparse.line-col :as lc]))
-  ;(:use clojure.tools.trace)
 
 (def ^:dynamic *default-output-format* :hiccup)
 (defn set-default-output-format!
   "Changes the default output format.  Input should be :hiccup or :enlive"
   [type]
   {:pre [(#{:hiccup :enlive} type)]}
-  (alter-var-root #'*default-output-format* (constantly type)))
+  #?(:clj (alter-var-root #'*default-output-format* (constantly type))
+     :cljs (set! *default-output-format* type)))
 
 (def ^:dynamic *default-input-format* :ebnf)
 (defn set-default-input-format!
   "Changes the default input format.  Input should be :abnf or :ebnf"
   [type]
   {:pre [(#{:abnf :ebnf} type)]}
-  (alter-var-root #'*default-input-format* (constantly type)))
+  #?(:clj (alter-var-root #'*default-input-format* (constantly type))
+     :cljs (set! *default-input-format* type)))
 
-(declare failure? standard-whitespace-parsers enable-tracing!)
+(declare failure? standard-whitespace-parsers
+         #?(:clj enable-tracing!))
 
 (defn- unhide-parser [parser unhide]
   (case unhide
@@ -40,7 +42,7 @@
     :all
     (assoc parser :grammar (c/unhide-all (:output-format parser)
                                          (:grammar parser)))))
-  
+
 (defn parse 
   "Use parser to parse the text.  Returns first parse tree found
    that completely parses the text.  If no parse tree is possible, returns
@@ -71,11 +73,11 @@
         trace?
         (get options :trace false)
         
-        _ (when (and trace? (not gll/TRACE)) (enable-tracing!))
+        #?@(:clj [_ (when (and trace? (not gll/TRACE)) (enable-tracing!))])
         
         parser (unhide-parser parser unhide)]
-    (gll/bind-trace 
-      trace?
+    (#?@(:clj [gll/bind-trace trace?]
+         :cljs [do])
       (cond
         (:total options)
         (gll/parse-total (:grammar parser) start-production text 
@@ -89,7 +91,7 @@
         
         :else
         (gll/parse (:grammar parser) start-production text partial?)))))
-  
+
 (defn parses 
   "Use parser to parse the text.  Returns lazy seq of all parse trees
    that completely parse the text.  If no parse tree is possible, returns
@@ -115,11 +117,12 @@
         trace?
         (get options :trace false)
         
-        _ (when (and trace? (not gll/TRACE)) (enable-tracing!))
+        #?@(:clj [_ (when (and trace? (not gll/TRACE)) (enable-tracing!))])
         
         parser (unhide-parser parser unhide)]
-    (gll/bind-trace 
-      trace?
+    (#?@(:clj [gll/bind-trace 
+               trace?]
+         :cljs [do])
       (cond
         (:total options)
         (gll/parses-total (:grammar parser) start-production text 
@@ -127,19 +130,36 @@
         
         :else
         (gll/parses (:grammar parser) start-production text partial?)))))
-  
-(defrecord Parser [grammar start-production output-format]
-  clojure.lang.IFn
-  (invoke [parser text] (parse parser text))
-  (invoke [parser text key1 val1] (parse parser text key1 val1))
-  (invoke [parser text key1 val1 key2 val2] (parse parser text key1 val1 key2 val2))
-  (invoke [parser text key1 val1 key2 val2 key3 val3] (parse parser text key1 val1 key2 val2 key3 val3))
-  (applyTo [parser args] (apply parse parser args)))
+
+#?(:clj
+   (defrecord Parser [grammar start-production output-format]
+     clojure.lang.IFn
+     (invoke [parser text] (parse parser text))
+     (invoke [parser text key1 val1] (parse parser text key1 val1))
+     (invoke [parser text key1 val1 key2 val2] (parse parser text key1 val1 key2 val2))
+     (invoke [parser text key1 val1 key2 val2 key3 val3] (parse parser text key1 val1 key2 val2 key3 val3))
+     (applyTo [parser args] (apply parse parser args))))
 
 
-(defmethod clojure.core/print-method Parser [x writer]
-  (binding [*out* writer]
-    (println (print/Parser->str x))))
+#?(:clj
+   (defmethod clojure.core/print-method Parser [x writer]
+     (binding [*out* writer]
+       (println (print/Parser->str x)))))
+
+#?(:cljs
+   (defrecord Parser [grammar start-production output-format]
+     IFn
+     (-invoke [parser text] (parse parser text))
+     (-invoke [parser text key1 val1] (parse parser text key1 val1))
+     (-invoke [parser text key1 val1 key2 val2] (parse parser text key1 val1 key2 val2))
+     (-invoke [parser text key1 val1 key2 val2 key3 val3] (parse parser text key1 val1 key2 val2 key3 val3))
+     #_(-applyTo [parser args] (apply parse parser args)))) 
+
+#?(:cljs
+   (extend-protocol IPrintWithWriter
+     instaparse.core/Parser
+     (-pr-writer  [parser writer _]
+       (-write writer (print/Parser->str parser)))))
 
 (defn parser
   "Takes a string specification of a context-free grammar,
@@ -192,15 +212,16 @@
         (cond
           (string? grammar-specification)
           (let [parser
-                (if (get options :no-slurp)
-                  ; if :no-slurp is set to true, string is a grammar spec
-                  (build-parser grammar-specification output-format)                  
-                  ; otherwise, grammar-specification might be a URI,
-                  ; let's slurp to see
-                  (try (let [spec (slurp grammar-specification)]
-                         (build-parser spec output-format))
-                    (catch java.io.FileNotFoundException e 
-                      (build-parser grammar-specification output-format))))]            
+                #?(:clj (if (get options :no-slurp)
+                                        ; if :no-slurp is set to true, string is a grammar spec
+                          (build-parser grammar-specification output-format)                  
+                                        ; otherwise, grammar-specification might be a URI,
+                                        ; let's slurp to see
+                          (try (let [spec (slurp grammar-specification)]
+                                 (build-parser spec output-format))
+                               (catch java.io.FileNotFoundException e 
+                                 (build-parser grammar-specification output-format))))
+                   :cljs (build-parser grammar-specification output-format))]            
             (if start (map->Parser (assoc parser :start-production start))
               (map->Parser parser)))
           
@@ -219,10 +240,11 @@
                                                    start)]
             (map->Parser parser))
 
-          :else
-          (let [spec (slurp grammar-specification)
-                parser (build-parser spec output-format)]
-            (map->Parser parser)))]
+          #?@(:clj
+              [:else
+               (let [spec (slurp grammar-specification)
+                     parser (build-parser spec output-format)]
+                 (map->Parser parser))]))]
     
     (let [auto-whitespace (get options :auto-whitespace)
           ; auto-whitespace is keyword, parser, or nil
@@ -234,50 +256,58 @@
                (c/auto-whitespace (:grammar built-parser) (:start-production built-parser)
                                   ws-grammar ws-start))
         built-parser))))
-        
+
 (defn failure?
   "Tests whether a parse result is a failure."
   [result]
   (or
-    (instance? gll/failure-type result)
-    (instance? gll/failure-type (meta result))))
+    (instance? #?(:clj gll/failure-type
+                  :cljs instaparse.gll.Failure) result)
+    (instance? #?(:clj gll/failure-type
+                  :cljs instaparse.gll.Failure) (meta result))))
 
 (defn get-failure
   "Extracts failure object from failed parse result."
   [result]
   (cond
-    (instance? gll/failure-type result)
+    (instance? #?(:clj gll/failure-type
+                  :cljs instaparse.gll.Failure) result)
     result
-    (instance? gll/failure-type (meta result))
+    (instance? #?(:clj gll/failure-type
+                  :cljs instaparse.gll.Failure) (meta result))
     (meta result)
     :else
     nil))
 
-(defn enable-tracing!
-  "Recompiles instaparse with tracing enabled.
-This is called implicitly the first time you invoke a parser with
-`:trace true` so usually you will not need to call this directly."
-  []
-  (alter-var-root #'gll/TRACE (constantly true))
-  (alter-var-root #'gll/PROFILE (constantly true))
-  (require 'instaparse.gll :reload))
+#?(:clj
+   (defn enable-tracing!
+     "Recompiles instaparse with tracing enabled.
+  This is called implicitly the first time you invoke a parser with
+  `:trace true` so usually you will not need to call this directly."
+     []
+     (alter-var-root #'gll/TRACE (constantly true))
+     (alter-var-root #'gll/PROFILE (constantly true))
+     (require 'instaparse.gll :reload)))
 
-(defn disable-tracing!
-  "Recompiles instaparse with tracing disabled.
-Call this to restore regular performance characteristics, eliminating
-the small performance hit imposed by tracing."
-  []
-  (alter-var-root #'gll/TRACE (constantly false))
-  (alter-var-root #'gll/PROFILE (constantly false))
-  (require 'instaparse.gll :reload))  
+#?(:clj
+   (defn disable-tracing!
+     "Recompiles instaparse with tracing disabled.
+  Call this to restore regular performance characteristics, eliminating
+  the small performance hit imposed by tracing."
+     []
+     (alter-var-root #'gll/TRACE (constantly false))
+     (alter-var-root #'gll/PROFILE (constantly false))
+     (require 'instaparse.gll :reload)))
 
-(defclone span viz/span)
-   
-(defclone transform t/transform)
+#?(:clj (defclone span viz/span))
 
-(defclone visualize viz/tree-viz)
+#?(:clj (defclone transform t/transform)
+   :cljs (def transform t/transform))
 
-(defclone add-line-and-column-info-to-metadata lc/add-line-col-spans)
+#?(:clj (defclone visualize viz/tree-viz))
+
+#?(:clj (defclone add-line-and-column-info-to-metadata lc/add-line-col-spans)
+   :cljs (def add-line-and-column-info-to-metadata lc/add-line-col-spans))
 
 (def ^:private standard-whitespace-parsers
   {:standard (parser "whitespace = #'\\s+'")
