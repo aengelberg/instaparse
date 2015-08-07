@@ -1,4 +1,4 @@
-(ns instaparse.runner.runner
+(ns instaparse.runner
   (:require [cljs.nodejs :as nodejs]
             [instaparse.abnf-test]
             [instaparse.auto-flatten-seq-test]
