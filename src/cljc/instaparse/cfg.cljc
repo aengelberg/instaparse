@@ -1,23 +1,46 @@
 (ns instaparse.cfg
   "This is the context free grammar that recognizes context free grammars."
+  #?(:clj (:refer-clojure :exclude [cat]))
   (:require [instaparse.combinators-source :refer
              [Epsilon opt plus star rep alt ord cat string-ci string
               string-ci regexp nt look neg hide hide-tag]]
             [instaparse.reduction :refer [apply-standard-reductions]]
             [instaparse.gll :refer [parse]]
             [clojure.string :as str]
-            [cljs.reader :as reader]))
+            #?(:cljs [cljs.reader :as reader])))
 
 (def ^:dynamic *case-insensitive-literals*
   "When true all string literal terminals in built grammar will be treated as case insensitive"
   false)
 
-(def single-quoted-string #"'[^'\\]*(?:\\.[^'\\]*)*'") ; Single-quoted string
-(def single-quoted-regexp #"#'[^'\\]*(?:\\.[^'\\]*)*'") ; Single-quoted regexp
-(def double-quoted-string #"\"[^\"\\]*(?:\\.[^\"\\]*)*\"") ; Double-quoted string
-(def double-quoted-regexp #"#\"[^\"\\]*(?:\\.[^\"\\]*)*\"") ; Double-quoted regexp
-(def inside-comment #"(?:(?!(?:\(\*|\*\)))[\s\S])*") ; Comment text
-(def ws "[,\\s]*")
+(defn with-comment
+  "Adds regex comments in Clojure, so parse failures are more
+  meaningful. They are omitted from cljs, as regex comments are not
+  supported in cljs."
+  [regex comment]
+  #?(:clj (re-pattern (str regex "(?x) #" comment))
+     :cljs regex))
+
+(defn throw-runtime-exception
+  "Throws a RuntimeException in Clojure, or just the string in
+  ClojureScript."
+  [s]
+  #?(:clj (throw (RuntimeException. s))
+     :cljs (throw s)))
+
+(defn throw-illegal-argument-exception
+  "Throws an IllegalArgumentException in Clojure, or just the string
+  in ClojureScript."
+  [s]
+  #?(:clj (throw (IllegalArgumentException. s))
+     :cljs (throw s)))
+
+(def single-quoted-string (with-comment #"'[^'\\]*(?:\\.[^'\\]*)*'" "Single-quoted string"))
+(def single-quoted-regexp (with-comment #"#'[^'\\]*(?:\\.[^'\\]*)*'" "Single-quoted regexp"))
+(def double-quoted-string (with-comment #"\"[^\"\\]*(?:\\.[^\"\\]*)*\"" "Double-quoted string"))
+(def double-quoted-regexp (with-comment #"#\"[^\"\\]*(?:\\.[^\"\\]*)*\"" "Double-quoted regexp"))
+(def inside-comment (with-comment #"(?:(?!(?:\(\*|\*\)))[\s\S])*" "Comment text"))
+(def ws (with-comment #"[,\s]*" "optional whitespace"))
 
 (def opt-whitespace (hide (nt :opt-whitespace)))
 
@@ -47,7 +70,7 @@
                            (cat (nt :opt-whitespace) (alt (string ";") (string ".")) (nt :opt-whitespace)))))          
      :nt (cat
            (neg (nt :epsilon))
-           (regexp "[^, \\r\\t\\n<>(){}\\[\\]+*?:=|'\"#&!;./]+")) ; Non-terminal
+           (regexp (with-comment "[^, \\r\\t\\n<>(){}\\[\\]+*?:=|'\"#&!;./]+" "Non-terminal")))
           :hide-nt (cat (hide (string "<"))
                         opt-whitespace
                         (nt :nt)
@@ -148,14 +171,33 @@
              (if (= c2 \')
                (recur (drop 2 sq) (conj v c2))
                (recur (drop 2 sq) (conj v c c2)))
-             (throw (str "Encountered backslash character at end of string:" s)))
+             (throw-runtime-exception
+              (str "Encountered backslash character at end of string:" s)))
         \" (recur (next sq) (conj v \\ \"))
         (recur (next sq) (conj v c)))
       (apply str v))))                     
 
-(defn safe-read-string [s]
-  (reader/read-string* (reader/push-back-reader s) nil))
+;(defn safe-read-string [s]
+;  (binding [*read-eval* false]
+;    (read-string s)))
 
+#?(:clj
+   (defn wrap-reader [reader] 
+     (let [{major :major minor :minor} *clojure-version*]
+       (if (and (<= major 1) (<= minor 6))
+         reader
+         (fn [r s] (reader r s {} (java.util.LinkedList.)))))))
+
+#?(:clj
+   (let [string-reader (wrap-reader
+                        (clojure.lang.LispReader$StringReader.))]
+     (defn safe-read-string
+       "Expects a double-quote at the end of the string"
+       [s]
+       (with-in-str s (string-reader *in* nil))))
+   :cljs
+   (defn safe-read-string [s]
+     (reader/read-string* (reader/push-back-reader s) nil)))
 
 ; I think re-pattern is sufficient, but here's how to do it without.
 ;(let [regexp-reader (clojure.lang.LispReader$RegexReader.)]
@@ -235,14 +277,16 @@
   (let [valid-nts (set (keys grammar-map))]
     (doseq [nt (distinct (mapcat seq-nt (vals grammar-map)))]
       (when-not (valid-nts nt)
-        (throw (str (subs (str nt) 1) " occurs on the right-hand side of your grammar, but not on the left")))))
+        (throw-runtime-exception
+         (str (subs (str nt) 1) " occurs on the right-hand side of your grammar, but not on the left")))))
   grammar-map)
           
 (defn build-parser [spec output-format]
   (let [rules (parse cfg :rules spec false)]
     (if (instance? instaparse.gll.Failure rules)
-      (throw (str "Error parsing grammar specification:\n"
-                  (with-out-str (println rules))))
+      (throw-runtime-exception
+       (str "Error parsing grammar specification:\n"
+            (with-out-str (println rules))))
       (let [productions (map build-rule rules)
             start-production (first (first productions))] 
         {:grammar (check-grammar (apply-standard-reductions output-format (into {} productions)))
@@ -251,7 +295,8 @@
 
 (defn build-parser-from-combinators [grammar-map output-format start-production]
   (if (nil? start-production)
-    (throw "When you build a parser from a map of parser combinators, you must provide a start production using the :start keyword argument.")
+    (throw-illegal-argument-exception
+     "When you build a parser from a map of parser combinators, you must provide a start production using the :start keyword argument.")
     {:grammar (check-grammar (apply-standard-reductions output-format grammar-map))
      :start-production start-production
      :output-format output-format}))
@@ -265,11 +310,13 @@ Useful for combining with other combinators."
   (if (re-find #"[:=]" spec)    
     (let [rules (parse cfg :rules spec false)]
       (if (instance? instaparse.gll.Failure rules)
-        (throw (str "Error parsing grammar specification:\n"
-                    (with-out-str (println rules))))    
+        (throw-runtime-exception
+         (str "Error parsing grammar specification:\n"
+              (with-out-str (println rules))))
         (into {} (map build-rule rules))))
     (let [rhs (parse cfg :alt-or-ord spec false)]
       (if (instance? instaparse.gll.Failure rhs)
-        (throw (str "Error parsing grammar specification:\n"
-                    (with-out-str (println rhs))))          
+        (throw-runtime-exception
+         (str "Error parsing grammar specification:\n"
+              (with-out-str (println rhs))))
         (build-rule (first rhs))))))      
